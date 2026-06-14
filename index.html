@@ -1,1 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Procedural World</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #87CEEB; /* Sky blue background */
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            /* CRITICAL FOR PIXEL ART: Prevents browser-side blurring */
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
 
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// --- CONFIGURATION ---
+const BLOCK_SIZE = 8;  // Your 8x8 asset size
+const SCALE = 6;       // Scale factor so 8x8 blocks look retro but readable
+const WORLD_WIDTH = 300;  // In blocks
+const WORLD_HEIGHT = 150; // In blocks
+
+// Block IDs
+const AIR = 0;
+const GRASS = 1;
+const DIRT = 2;
+const SAND = 3;
+
+// --- ASSET LOADING ---
+const assets = {
+    Grass: new Image(),
+    Dirt: new Image(),
+    Sand: new Image()
+};
+
+// Replace these strings with your exact relative paths if they are in subfolders (e.g., 'assets/Grass.png')
+assets.Grass.src = 'Grass.png';
+assets.Dirt.src = 'Dirt.png';
+assets.Sand.src = 'Sand.png';
+
+// --- GAME STATE ---
+let world = [];
+let player = {
+    x: (WORLD_WIDTH * BLOCK_SIZE) / 2,
+    y: 0,
+    width: 6,
+    height: 14,
+    vx: 0,
+    vy: 0,
+    speed: 1.5,
+    gravity: 0.1,
+    jumpForce: -2.5,
+    grounded: false
+};
+
+let camera = {
+    x: 0,
+    y: 0,
+    lerp: 0.1 // Smoothness of the camera follow
+};
+
+// Key tracking
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// Resize canvas to fit screen
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    // CRITICAL FOR PIXEL ART: Keeps context drawings crisp when scaled
+    ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// --- PROCEDURAL WORLD GENERATION ---
+function generateWorld() {
+    // Initialize empty 2D grid
+    for (let x = 0; x < WORLD_WIDTH; x++) {
+        world[x] = [];
+        
+        // Combine multiple sine waves for cool, varied rolling hills
+        let surfaceNoise = Math.sin(x * 0.05) * 15;
+        let detailNoise = Math.sin(x * 0.2) * 3;
+        let mountainNoise = Math.cos(x * 0.01) * 30;
+        
+        // Calculate the absolute surface Y coordinate for this X column
+        let surfaceY = Math.floor(WORLD_HEIGHT / 2 + surfaceNoise + detailNoise + mountainNoise);
+
+        for (let y = 0; y < WORLD_HEIGHT; y++) {
+            if (y < surfaceY) {
+                world[x][y] = AIR;
+            } else if (y === surfaceY) {
+                // Cool feature: Create sand beaches/dunes in lower valleys
+                if (surfaceY > WORLD_HEIGHT / 2 + 10) {
+                    world[x][y] = SAND;
+                } else {
+                    world[x][y] = GRASS;
+                }
+            } else if (y < surfaceY + 5) {
+                // Just under the surface
+                if (world[x][surfaceY] === SAND) {
+                    world[x][y] = SAND; // Sand runs deeper in beaches
+                } else {
+                    world[x][y] = DIRT;
+                }
+            } else {
+                // Deep underground: Dirt, interspersed with cool cave openings
+                let caveNoise = Math.sin(x * 0.15) * Math.cos(y * 0.15) + Math.sin(x * 0.05) * Math.sin(y * 0.05);
+                
+                if (caveNoise > 0.45) { 
+                    world[x][y] = AIR; // Carve out a cave!
+                } else {
+                    world[x][y] = DIRT;
+                }
+            }
+        }
+    }
+    
+    // Spawn player safely above the ground at the center of the world
+    let startX = Math.floor(WORLD_WIDTH / 2);
+    let startY = 0;
+    while (startY < WORLD_HEIGHT && world[startX][startY] === AIR) {
+        startY++;
+    }
+    player.x = startX * BLOCK_SIZE;
+    player.y = (startY - 3) * BLOCK_SIZE;
+}
+
+// --- PHYSICS & COLLISION ---
+function checkCollision(x, y) {
+    let blockX = Math.floor(x / BLOCK_SIZE);
+    let blockY = Math.floor(y / BLOCK_SIZE);
+    
+    if (blockX < 0 || blockX >= WORLD_WIDTH || blockY < 0 || blockY >= WORLD_HEIGHT) {
+        return true; // Treat world boundaries as solid
+    }
+    return world[blockX][blockY] !== AIR;
+}
+
+function updatePlayer() {
+    // Movement inputs
+    if (keys['KeyA'] || keys['ArrowLeft']) player.vx = -player.speed;
+    else if (keys['KeyD'] || keys['ArrowRight']) player.vx = player.speed;
+    else player.vx = 0;
+
+    if ((keys['KeyW'] || keys['Space'] || keys['ArrowUp']) && player.grounded) {
+        player.vy = player.jumpForce;
+        player.grounded = false;
+    }
+
+    // Apply gravity
+    player.vy += player.gravity;
+
+    // Separate Axis Collision (X axis)
+    player.x += player.vx;
+    if (checkCollision(player.x, player.y) || checkCollision(player.x + player.width, player.y) || 
+        checkCollision(player.x, player.y + player.height) || checkCollision(player.x + player.width, player.y + player.height)) {
+        player.x -= player.vx;
+    }
+
+    // Separate Axis Collision (Y axis)
+    player.y += player.vy;
+    player.grounded = false;
+    if (checkCollision(player.x, player.y) || checkCollision(player.x + player.width, player.y) || 
+        checkCollision(player.x, player.y + player.height) || checkCollision(player.x + player.width, player.y + player.height)) {
+        
+        // If moving down, hit the ground
+        if (player.vy > 0) {
+            player.grounded = true;
+            player.y = Math.floor(player.y / BLOCK_SIZE) * BLOCK_SIZE;
+        } else if (player.vy < 0) { // If moving up, hit a ceiling
+            player.y = Math.ceil(player.y / BLOCK_SIZE) * BLOCK_SIZE;
+        }
+        player.vy = 0;
+    }
+}
+
+// --- CAMERA SYSTEM ---
+function updateCamera() {
+    // Center the camera targets on the player
+    let targetX = (player.x + player.width / 2) * SCALE - canvas.width / 2;
+    let targetY = (player.y + player.height / 2) * SCALE - canvas.height / 2;
+
+    // Smooth Terraria-style camera tracking (LERP)
+    camera.x += (targetX - camera.x) * camera.lerp;
+    camera.y += (targetY - camera.y) * camera.lerp;
+
+    // Clamp camera to world boundaries so it doesn't show off-world voids
+    camera.x = Math.max(0, Math.min(camera.x, (WORLD_WIDTH * BLOCK_SIZE) * SCALE - canvas.width));
+    camera.y = Math.max(0, Math.min(camera.y, (WORLD_HEIGHT * BLOCK_SIZE) * SCALE - canvas.height));
+}
+
+// --- RENDERING ---
+function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    // Shift world rendering based on camera positions
+    ctx.translate(-Math.floor(camera.x), -Math.floor(camera.y));
+    ctx.scale(SCALE, SCALE);
+
+    // Dynamic Culling: Only loop through/draw blocks visible on screen
+    let startBlockX = Math.max(0, Math.floor(camera.x / (BLOCK_SIZE * SCALE)));
+    let endBlockX = Math.min(WORLD_WIDTH, Math.ceil((camera.x + canvas.width) / (BLOCK_SIZE * SCALE)));
+    let startBlockY = Math.max(0, Math.floor(camera.y / (BLOCK_SIZE * SCALE)));
+    let endBlockY = Math.min(WORLD_HEIGHT, Math.ceil((camera.y + canvas.height) / (BLOCK_SIZE * SCALE)));
+
+    for (let x = startBlockX; x < endBlockX; x++) {
+        for (let y = startBlockY; y < endBlockY; y++) {
+            let block = world[x][y];
+            if (block === AIR) continue;
+
+            let assetImg;
+            if (block === GRASS) assetImg = assets.Grass;
+            if (block === DIRT) assetImg = assets.Dirt;
+            if (block === SAND) assetImg = assets.Sand;
+
+            // If image is loaded, draw it. Otherwise, fallback to a color box.
+            if (assetImg && assetImg.complete) {
+                ctx.drawImage(assetImg, x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            } else {
+                if (block === GRASS) ctx.fillStyle = '#32CD32';
+                if (block === DIRT) ctx.fillStyle = '#8B4513';
+                if (block === SAND) ctx.fillStyle = '#EDC9AF';
+                ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            }
+        }
+    }
+
+    // Draw Player (Simple red rectangle, or replace with asset if you have one)
+    ctx.fillStyle = '#FF0000';
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+
+    ctx.restore();
+}
+
+// --- MAIN LOOP ---
+function gameLoop() {
+    updatePlayer();
+    updateCamera();
+    render();
+    requestAnimationFrame(gameLoop);
+}
+
+// Start game
+generateWorld();
+gameLoop();
+</script>
+
+</body>
+</html>
